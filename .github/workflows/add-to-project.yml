@@ -1,0 +1,80 @@
+# Reusable: add a repo's issues to the D3M Labs Multi-Project View (org
+# project 5), the planning board that spans every d3mlabs repo.
+#
+# GitHub's built-in "Auto-add to project" workflow is one repo per workflow
+# and capped per plan (5 on Team), so it cannot feed the board from the whole
+# org. This workflow does it from Actions instead: each participating repo
+# adds a ~10-line caller (see README) that fires on `issues: opened` and, via
+# `workflow_dispatch`, can sweep its existing open issues once.
+#
+# Writes to an org project need a token carrying `organization_projects:
+# write`; GITHUB_TOKEN never does. The call authenticates as the d3mlabs-bot
+# GitHub App (org secrets D3MLABS_BOT_APP_ID / _PRIVATE_KEY, granted to the
+# participating repos), minting a per-run token scoped to the calling repo.
+name: add-to-project
+
+on:
+  workflow_call:
+    inputs:
+      backfill:
+        description: >-
+          Add every open issue of the calling repo instead of only the
+          triggering one — a one-time sweep for repos joining the board.
+        type: boolean
+        default: false
+    secrets:
+      D3MLABS_BOT_APP_ID:
+        required: true
+      D3MLABS_BOT_PRIVATE_KEY:
+        required: true
+
+env:
+  PROJECT_OWNER: d3mlabs
+  PROJECT_NUMBER: 5
+
+jobs:
+  add-to-project:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mint project token (d3mlabs-bot)
+        id: project-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.D3MLABS_BOT_APP_ID }}
+          private-key: ${{ secrets.D3MLABS_BOT_PRIVATE_KEY }}
+          owner: ${{ env.PROJECT_OWNER }}
+          repositories: ${{ github.event.repository.name }}
+          permission-organization-projects: write
+          permission-issues: read
+
+      - name: Add the triggering issue
+        if: ${{ !inputs.backfill }}
+        uses: actions/add-to-project@v2.0.0
+        with:
+          project-url: https://github.com/orgs/${{ env.PROJECT_OWNER }}/projects/${{ env.PROJECT_NUMBER }}
+          github-token: ${{ steps.project-token.outputs.token }}
+
+      # Adding an item already on the board is a no-op, so the sweep is safe
+      # to re-run. Pull requests are excluded: the board is for planning.
+      - name: Backfill every open issue
+        if: ${{ inputs.backfill }}
+        env:
+          GH_TOKEN: ${{ steps.project-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          # The $names in single quotes are GraphQL variables, not shell.
+          # shellcheck disable=SC2016
+          project_id=$(gh api graphql \
+            -f owner="$PROJECT_OWNER" -F number="$PROJECT_NUMBER" \
+            -f query='query($owner: String!, $number: Int!) {
+              organization(login: $owner) { projectV2(number: $number) { id } }
+            }' --jq '.data.organization.projectV2.id')
+          gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 1000 --json id,number --jq '.[] | "\(.id) \(.number)"' |
+            while read -r issue_id issue_number; do
+              # shellcheck disable=SC2016
+              gh api graphql -f project="$project_id" -f content="$issue_id" \
+                -f query='mutation($project: ID!, $content: ID!) {
+                  addProjectV2ItemById(input: { projectId: $project, contentId: $content }) { item { id } }
+                }' --silent
+              echo "added #$issue_number"
+            done
