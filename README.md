@@ -8,9 +8,11 @@ define its own; reusable workflows here are callable from any d3mlabs repo.
 
 ### `add-to-project`
 
-Feeds a repo's issues to the
+Feeds a repo's newly opened issues to the
 [D3M Labs Multi-Project View](https://github.com/orgs/d3mlabs/projects/5),
-the planning board spanning every d3mlabs repo. See the header of
+the planning board spanning every d3mlabs repo. Only issues opened by org
+members, outside collaborators, or the ai-flow App are added; drive-by
+issues on public repos stay in the repo for triage. See the header of
 [`.github/workflows/add-to-project.yml`](.github/workflows/add-to-project.yml)
 for why this is a workflow rather than the project's built-in automation.
 
@@ -25,18 +27,19 @@ name: add-to-project
 on:
   issues:
     types: [opened]
-  # Dispatching sweeps every open issue onto the board (one-time, re-runnable).
-  workflow_dispatch:
 
 jobs:
   add-to-project:
     uses: d3mlabs/.github/.github/workflows/add-to-project.yml@main
-    with:
-      backfill: ${{ github.event_name == 'workflow_dispatch' }}
     secrets:
       D3MLABS_BOT_APP_ID: ${{ secrets.D3MLABS_BOT_APP_ID }}
       D3MLABS_BOT_PRIVATE_KEY: ${{ secrets.D3MLABS_BOT_PRIVATE_KEY }}
 ```
 
-After merging the caller, run it once from the Actions tab (`Run workflow`)
-to backfill the repo's existing open issues.
+The workflow only sees issues opened after it lands. A repo joining the
+board with existing open issues gets them on once, by hand:
+
+```sh
+gh issue list --repo d3mlabs/<repo> --state open --limit 1000 --json url --jq '.[].url' |
+  xargs -n1 gh project item-add 5 --owner d3mlabs --url
+```

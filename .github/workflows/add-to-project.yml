@@ -1,0 +1,64 @@
+# Reusable: add a repo's newly opened issues to the D3M Labs Multi-Project
+# View (org project 5), the planning board that spans every d3mlabs repo.
+#
+# GitHub's built-in "Auto-add to project" workflow is one repo per workflow
+# and capped per plan (5 on Team), so it cannot feed the board from the whole
+# org. This workflow does it from Actions instead: each participating repo
+# adds a ~10-line caller (see README) that fires on `issues: opened`.
+#
+# The board is a statement of intent, not an inbox: only issues opened by
+# org members, outside collaborators, or the ai-flow App (its /split
+# sub-issues are planning items) are added. Drive-by issues on the public
+# repos stay in the repo for triage; the ones worth planning get added by
+# hand or by becoming a sub-issue of a plan.
+#
+# Writes to an org project need a token carrying `organization_projects:
+# write`; GITHUB_TOKEN never does. The call authenticates as the d3mlabs-bot
+# GitHub App (org secrets D3MLABS_BOT_APP_ID / _PRIVATE_KEY, granted to the
+# participating repos), minting a per-run token. Its repository permissions
+# are scoped to the calling repo; the projects permission is org-wide by
+# nature (GitHub has no per-project scoping), so the token can write to any
+# d3mlabs project for the minute it lives.
+name: add-to-project
+
+on:
+  workflow_call:
+    secrets:
+      D3MLABS_BOT_APP_ID:
+        required: true
+      D3MLABS_BOT_PRIVATE_KEY:
+        required: true
+
+# GITHUB_TOKEN is unused; the App token below is the only credential.
+permissions: {}
+
+env:
+  PROJECT_OWNER: d3mlabs
+  PROJECT_NUMBER: 5
+
+jobs:
+  add-to-project:
+    # On org-owned repos members report as MEMBER (never OWNER); OWNER is kept
+    # for user-owned repos lifting this workflow. Apps are never members, so
+    # the ai-flow bot is allowed by login.
+    if: >-
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.issue.author_association)
+      || github.event.issue.user.login == 'd3mlabs-ai-flow[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mint project token (d3mlabs-bot)
+        id: project-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.D3MLABS_BOT_APP_ID }}
+          private-key: ${{ secrets.D3MLABS_BOT_PRIVATE_KEY }}
+          owner: ${{ env.PROJECT_OWNER }}
+          repositories: ${{ github.event.repository.name }}
+          permission-organization-projects: write
+          permission-issues: read
+
+      - name: Add the opened issue
+        uses: actions/add-to-project@5afcf98fcd03f1c2f92c3c83f58ae24323cc57fd # v2.0.0
+        with:
+          project-url: https://github.com/orgs/${{ env.PROJECT_OWNER }}/projects/${{ env.PROJECT_NUMBER }}
+          github-token: ${{ steps.project-token.outputs.token }}
