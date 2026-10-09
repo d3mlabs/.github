@@ -7,10 +7,15 @@
 # adds a ~10-line caller (see README) that fires on `issues: opened`.
 #
 # The board is a statement of intent, not an inbox: only issues opened by
-# org members, outside collaborators, or the ai-flow App (its /split
-# sub-issues are planning items) are added. Drive-by issues on the public
-# repos stay in the repo for triage; the ones worth planning get added by
-# hand or by becoming a sub-issue of a plan.
+# someone with triage or higher access to the repo, or by the ai-flow App
+# (its /split sub-issues are planning items), are added. Drive-by issues on
+# the public repos stay in the repo for triage; the ones worth planning get
+# added by hand or by becoming a sub-issue of a plan. The gate asks GitHub
+# for the author's repo role rather than reading the event's
+# `author_association`: that field is computed for the receiving app, and a
+# private org membership reads as a non-member to Actions (it skipped the
+# org owner). An org member holding only the org base permission (read) is
+# not added either.
 #
 # Writes to an org project need a token carrying `organization_projects:
 # write`; GITHUB_TOKEN never does. The call authenticates as the d3mlabs-bot
@@ -29,7 +34,8 @@ on:
       D3MLABS_BOT_PRIVATE_KEY:
         required: true
 
-# GITHUB_TOKEN is unused; the App token below is the only credential.
+# GITHUB_TOKEN keeps metadata:read, which is all the access lookup needs;
+# the App token below is the only credential that writes.
 permissions: {}
 
 env:
@@ -38,15 +44,31 @@ env:
 
 jobs:
   add-to-project:
-    # On org-owned repos members report as MEMBER (never OWNER); OWNER is kept
-    # for user-owned repos lifting this workflow. Apps are never members, so
-    # the ai-flow bot is allowed by login.
-    if: >-
-      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.issue.author_association)
-      || github.event.issue.user.login == 'd3mlabs-ai-flow[bot]'
     runs-on: ubuntu-latest
     steps:
+      # Apps never hold a repo role, so the ai-flow bot is allowed by login.
+      # A user who is not a collaborator at all resolves to `none`.
+      - name: Resolve the author's access to this repo
+        id: author
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUTHOR: ${{ github.event.issue.user.login }}
+        run: |
+          set -euo pipefail
+          if [ "$AUTHOR" = "d3mlabs-ai-flow[bot]" ]; then
+            role=ai-flow
+          else
+            role=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$AUTHOR/permission" --jq .role_name 2>/dev/null || echo none)
+          fi
+          case "$role" in
+            admin|maintain|write|triage|ai-flow) allowed=true ;;
+            *) allowed=false ;;
+          esac
+          echo "author=$AUTHOR role=$role allowed=$allowed"
+          echo "allowed=$allowed" >> "$GITHUB_OUTPUT"
+
       - name: Mint project token (d3mlabs-bot)
+        if: steps.author.outputs.allowed == 'true'
         id: project-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -58,6 +80,7 @@ jobs:
           permission-issues: read
 
       - name: Add the opened issue
+        if: steps.author.outputs.allowed == 'true'
         uses: actions/add-to-project@5afcf98fcd03f1c2f92c3c83f58ae24323cc57fd # v2.0.0
         with:
           project-url: https://github.com/orgs/${{ env.PROJECT_OWNER }}/projects/${{ env.PROJECT_NUMBER }}

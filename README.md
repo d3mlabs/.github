@@ -10,9 +10,10 @@ define its own; reusable workflows here are callable from any d3mlabs repo.
 
 Feeds a repo's newly opened issues to the
 [D3M Labs Multi-Project View](https://github.com/orgs/d3mlabs/projects/5),
-the planning board spanning every d3mlabs repo. Only issues opened by org
-members, outside collaborators, or the ai-flow App are added; drive-by
-issues on public repos stay in the repo for triage. See the header of
+the planning board spanning every d3mlabs repo. Only issues opened by
+someone with triage or higher access to the repo, or by the ai-flow App,
+are added; drive-by issues on public repos stay in the repo for triage.
+See the header of
 [`.github/workflows/add-to-project.yml`](.github/workflows/add-to-project.yml)
 for why this is a workflow rather than the project's built-in automation.
 
